@@ -644,7 +644,7 @@ async function handleScanPhoto(event){
     _scanState.debugUrl=fnUrl;
     const res=await fetch(fnUrl,{
       method:'POST',
-      headers:{'Authorization':'Bearer '+SUPABASE_KEY},
+      headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+SUPABASE_KEY},
       body:form
     });
     let data;
