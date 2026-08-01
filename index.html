@@ -8,7 +8,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,700;1,400&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
 :root{
   --ground:#F4EFE8;--paper:#F4EFE8;--ink:#1A1714;--fog:#6B6560;
@@ -628,30 +627,43 @@ async function handleScanPhoto(event){
   c.innerHTML=`
     <div class="card" style="text-align:center;padding:40px 20px;">
       <div class="spinner" style="margin:0 auto 18px;"></div>
-      <div style="font-weight:500;margin-bottom:6px;" id="ocr-status">Beleg wird gelesen…</div>
+      <div style="font-weight:500;margin-bottom:6px;">Beleg wird gelesen…</div>
       <div class="muted">Das kann einen kurzen Moment dauern.</div>
     </div>
   `;
 
   try{
-    // Bild komprimieren für schnellere OCR + Upload
+    // Bild komprimieren für schnelleren Upload
     const shrunk=await shrinkImage(file);
     _scanState.foto=shrunk;
 
-    const result=await Tesseract.recognize(shrunk,'deu',{
-      logger:m=>{
-        if(m.status==='recognizing text'){
-          const p=Math.round((m.progress||0)*100);
-          const st=document.getElementById('ocr-status');
-          if(st)st.textContent='Text wird erkannt… '+p+'%';
-        }
-      }
+    const form=new FormData();
+    form.append('document',shrunk,'beleg.jpg');
+
+    const res=await fetch(SUPABASE_URL+'/functions/v1/parse-receipt',{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+SUPABASE_KEY},
+      body:form
     });
-    _scanState.rawText=result.data.text||'';
-    _scanState.zeilen=parseReceiptLines(_scanState.rawText);
+    const data=await res.json();
+
+    if(!res.ok||data.error){
+      console.error('Mindee-Fehler:',data);
+      toast('Texterkennung fehlgeschlagen – bitte Positionen manuell eingeben');
+      _scanState.zeilen=[];
+      _scanState.rawText='';
+    }else{
+      _scanState.laden=data.laden||'';
+      _scanState.datum=data.datum||todayISO();
+      _scanState.zeilen=(data.positionen||[]).map(p=>({name:p.name,preis:Number(p.preis)||0}));
+      _scanState.rawText=JSON.stringify(data);
+      if(!_scanState.zeilen.length){
+        toast('Keine Positionen erkannt – bitte manuell ergänzen');
+      }
+    }
     renderScanReview();
   }catch(e){
-    console.error('OCR-Fehler:',e);
+    console.error('Fehler beim Beleg-Scan:',e);
     toast('Texterkennung fehlgeschlagen – bitte Positionen manuell eingeben');
     _scanState.zeilen=[];
     renderScanReview();
@@ -791,9 +803,9 @@ async function saveScanBeleg(){
     let fotoUrl=null;
     if(_scanState.foto){
       const path='belege/'+Date.now()+'_'+Math.floor(Math.random()*10000)+'.jpg';
-      const {error:upErr}=await sb.storage.from('belege-fotos').upload(path,_scanState.foto,{contentType:'image/jpeg'});
+      const {error:upErr}=await sb.storage.from('Belege-fotos').upload(path,_scanState.foto,{contentType:'image/jpeg'});
       if(!upErr){
-        const {data}=sb.storage.from('belege-fotos').getPublicUrl(path);
+        const {data}=sb.storage.from('Belege-fotos').getPublicUrl(path);
         fotoUrl=data?.publicUrl||null;
       }
     }
