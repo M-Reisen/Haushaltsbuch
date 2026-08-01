@@ -209,7 +209,7 @@ header{background:rgba(244,239,232,.95);backdrop-filter:blur(12px);position:stic
 // ═══════════════════════════════════════════════
 // SUPABASE SETUP
 // ═══════════════════════════════════════════════
-const SUPABASE_URL='https://zrgilitkriwmsjpxva.supabase.co';
+const SUPABASE_URL='https://zrgilitkriwmsjpxvall.supabase.co';
 const SUPABASE_KEY='sb_publishable_iJs7vrSXHq8pkMdtyCFWmA_UwfQQ-Bly';
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 
@@ -640,7 +640,9 @@ async function handleScanPhoto(event){
     const form=new FormData();
     form.append('document',shrunk,'beleg.jpg');
 
-    const res=await fetch(SUPABASE_URL+'/functions/v1/parse-receipt',{
+    const fnUrl=SUPABASE_URL+'/functions/v1/parse-receipt';
+    _scanState.debugUrl=fnUrl;
+    const res=await fetch(fnUrl,{
       method:'POST',
       headers:{'Authorization':'Bearer '+SUPABASE_KEY},
       body:form
@@ -751,6 +753,7 @@ function renderScanReview(){
     ? `<div class="card" style="background:#FBEAEA;border-color:#E3A5A5;margin-bottom:14px;">
         <div style="font-weight:600;color:#B23A3A;margin-bottom:4px;font-size:13.5px;">Fehler bei der Texterkennung</div>
         <div style="font-size:12.5px;color:#7A2E2E;word-break:break-word;font-family:monospace;">${esc(_scanState.lastError)}</div>
+        ${_scanState.debugUrl?`<div style="font-size:11px;color:#7A2E2E;word-break:break-all;font-family:monospace;margin-top:8px;opacity:.85;">Aufgerufen:<br>${esc(_scanState.debugUrl)}</div>`:''}
       </div>`
     : '';
 
