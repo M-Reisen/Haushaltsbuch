@@ -591,10 +591,10 @@ function renderStatistik(){
 // ═══════════════════════════════════════════════
 // SCAN / OCR / ERFASSUNG
 // ═══════════════════════════════════════════════
-let _scanState={foto:null,fotoUrl:null,rawText:'',zeilen:[],laden:'',datum:todayISO()};
+let _scanState={foto:null,fotoUrl:null,rawText:'',zeilen:[],laden:'',datum:todayISO(),lastError:null};
 
 function openScanScreen(){
-  _scanState={foto:null,fotoUrl:null,rawText:'',zeilen:[],laden:'',datum:todayISO()};
+  _scanState={foto:null,fotoUrl:null,rawText:'',zeilen:[],laden:'',datum:todayISO(),lastError:null};
   renderScanUpload();
   goTo('scan');
 }
@@ -645,18 +645,27 @@ async function handleScanPhoto(event){
       headers:{'Authorization':'Bearer '+SUPABASE_KEY},
       body:form
     });
-    const data=await res.json();
+    let data;
+    try{ data=await res.json(); }catch(parseErr){
+      const raw=await res.text().catch(()=>'(kein Text)');
+      throw new Error('Antwort war kein JSON (Status '+res.status+'): '+raw.slice(0,300));
+    }
 
     if(!res.ok||data.error){
       console.error('Mindee-Fehler:',data);
-      toast('Texterkennung fehlgeschlagen – bitte Positionen manuell eingeben');
+      const detail=data.error?(typeof data.error==='string'?data.error:JSON.stringify(data.error)):('HTTP '+res.status);
+      const extra=data.detail?(' – '+JSON.stringify(data.detail).slice(0,200)):'';
       _scanState.zeilen=[];
       _scanState.rawText='';
+      _scanState.lastError=detail+extra;
+      renderScanReview();
+      return;
     }else{
       _scanState.laden=data.laden||'';
       _scanState.datum=data.datum||todayISO();
       _scanState.zeilen=(data.positionen||[]).map(p=>({name:p.name,preis:Number(p.preis)||0}));
       _scanState.rawText=JSON.stringify(data);
+      _scanState.lastError=null;
       if(!_scanState.zeilen.length){
         toast('Keine Positionen erkannt – bitte manuell ergänzen');
       }
@@ -664,8 +673,8 @@ async function handleScanPhoto(event){
     renderScanReview();
   }catch(e){
     console.error('Fehler beim Beleg-Scan:',e);
-    toast('Texterkennung fehlgeschlagen – bitte Positionen manuell eingeben');
     _scanState.zeilen=[];
+    _scanState.lastError=(e&&e.message)?e.message:String(e);
     renderScanReview();
   }
 }
@@ -738,7 +747,15 @@ function renderScanReview(){
 
   const summe=_scanState.zeilen.reduce((s,z)=>s+z.preis,0);
 
+  const errorBanner=_scanState.lastError
+    ? `<div class="card" style="background:#FBEAEA;border-color:#E3A5A5;margin-bottom:14px;">
+        <div style="font-weight:600;color:#B23A3A;margin-bottom:4px;font-size:13.5px;">Fehler bei der Texterkennung</div>
+        <div style="font-size:12.5px;color:#7A2E2E;word-break:break-word;font-family:monospace;">${esc(_scanState.lastError)}</div>
+      </div>`
+    : '';
+
   c.innerHTML=`
+    ${errorBanner}
     ${_scanState.foto?`<div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;"><img src="${URL.createObjectURL(_scanState.foto)}" style="width:100%;max-height:220px;object-fit:cover;display:block;"></div>`:''}
 
     <div class="card" style="margin-bottom:16px;">
