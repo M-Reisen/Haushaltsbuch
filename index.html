@@ -75,6 +75,13 @@ header{background:rgba(244,239,232,.95);backdrop-filter:blur(12px);position:stic
 .eyebrow{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--terra);font-weight:600;margin-bottom:6px;}
 .empty-state{text-align:center;padding:50px 20px;color:var(--fog);}
 .empty-state svg{width:44px;height:44px;stroke-width:1.3;margin-bottom:12px;opacity:.5;}
+.field{display:block;}
+.field-label{display:block;font-size:12.5px;font-weight:600;color:var(--fog);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;}
+.field-label .muted{text-transform:none;letter-spacing:0;font-weight:400;}
+select{-webkit-appearance:none;appearance:none;}
+.seg{display:flex;gap:6px;}
+.seg-btn{flex:1;padding:11px 8px;border:1px solid var(--rule);border-radius:10px;background:var(--paper);color:var(--ink);font-size:13.5px;font-weight:500;}
+.seg-btn.active{background:var(--terra);border-color:var(--terra);color:#fff;}
 </style>
 </head>
 <body>
@@ -96,10 +103,12 @@ header{background:rgba(244,239,232,.95);backdrop-filter:blur(12px);position:stic
       <div class="sec-sub" id="home-sub">Dein Haushaltsbuch im Blick.</div>
 
       <div class="card" style="background:linear-gradient(135deg,#2C5F6A,#1f4650);color:#fff;border:none;">
-        <div style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;opacity:.75;margin-bottom:6px;">Diesen Monat ausgegeben</div>
+        <div style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;opacity:.75;margin-bottom:6px;">Meine Ausgaben diesen Monat</div>
         <div style="font-family:'Playfair Display',serif;font-size:34px;" id="home-month-total">0,00 €</div>
         <div style="font-size:12.5px;opacity:.8;margin-top:4px;" id="home-month-count">0 Belege</div>
       </div>
+
+      <div id="home-saldo"></div>
 
       <div id="home-recent-wrap">
         <div style="display:flex;justify-content:space-between;align-items:center;margin:22px 0 10px;">
@@ -107,13 +116,6 @@ header{background:rgba(244,239,232,.95);backdrop-filter:blur(12px);position:stic
           <button class="btn-sm btn-ghost" onclick="goTo('belege')">Alle ansehen</button>
         </div>
         <div id="home-recent"></div>
-      </div>
-
-      <div style="margin-top:22px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-          <h3 style="font-size:16px;">Preise, die sich bewegt haben</h3>
-        </div>
-        <div id="home-price-changes"></div>
       </div>
     </div>
   </div>
@@ -191,10 +193,6 @@ header{background:rgba(244,239,232,.95);backdrop-filter:blur(12px);position:stic
     <button class="nav-item" data-screen="belege" onclick="goTo('belege')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg>
       <span>Belege</span>
-    </button>
-    <button class="nav-item" data-screen="artikel" onclick="goTo('artikel')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5 3.5 21.5h17z"/><path d="M9 15.5h6"/></svg>
-      <span>Preise</span>
     </button>
     <button class="nav-item" data-screen="statistik" onclick="goTo('statistik')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M12 20V4M20 20v-7"/></svg>
@@ -274,34 +272,166 @@ async function initApp(){
 function renderHome(){
   const now=new Date();
   const ym=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  const monthBelege=_belege.filter(b=>b.datum&&b.datum.startsWith(ym));
-  const monthTotal=monthBelege.reduce((s,b)=>s+(Number(b.gesamt)||0),0);
+  const monthBelege=_belege.filter(b=>b.datum&&b.datum.startsWith(ym)&&!isAusgleich(b));
+  const monthTotal=monthBelege.reduce((s,b)=>s+meinAnteil(b),0);
   document.getElementById('home-month-total').textContent=fmtEUR(monthTotal);
   document.getElementById('home-month-count').textContent=monthBelege.length+(monthBelege.length===1?' Beleg':' Belege')+' diesen Monat';
 
-  const recent=_belege.slice(0,4);
+  renderSaldo();
+
+  const recent=_belege.filter(b=>!isAusgleich(b)).slice(0,4);
   const rc=document.getElementById('home-recent');
   if(!recent.length){
     rc.innerHTML='<div class="empty-state" style="padding:24px 12px;"><div class="muted">Noch keine Belege erfasst.</div></div>';
   }else{
     rc.innerHTML=recent.map(b=>belegRowHTML(b)).join('');
   }
+}
 
-  // Preise, die sich verändert haben (letzte 30 Tage, gleicher Artikel unterschiedlicher Preis)
-  const changes=computePriceChanges().slice(0,4);
-  const pc=document.getElementById('home-price-changes');
-  if(!changes.length){
-    pc.innerHTML='<div class="muted" style="padding:8px 2px;">Noch keine Preisveränderungen erkannt – dafür braucht ein Artikel mindestens 2 Einkäufe.</div>';
-  }else{
-    pc.innerHTML=changes.map(c=>priceChangeRowHTML(c)).join('');
-  }
+// Ausgleichs-Buchung erkennen (Marker im raw_text, z.B. "AUSGLEICH:MANN")
+function isAusgleich(b){ return b && typeof b.raw_text==='string' && b.raw_text.indexOf('AUSGLEICH')===0; }
+
+// Mein Anteil an einem Beleg (das, was ich am Ende wirklich trage)
+function meinAnteil(b){
+  const A=Number(b.gesamt)||0;
+  const t=b.teilung||'ICH';         // alte Belege ohne Teilung: zählen als meine Ausgabe
+  if(t==='MANN') return 0;          // voller Ausgleich durch Mann -> zählt für mich nicht
+  if(t==='GETEILT') return A/2;     // 50:50 -> nur meine Hälfte
+  return A;                          // nur ich
+}
+
+// Saldo: + => MANN schuldet ICH ; - => ICH schuldet MANN
+function computeSaldo(){
+  let net=0, count=0;
+  _belege.forEach(b=>{
+    const A=Number(b.gesamt)||0;
+    if(isAusgleich(b)){
+      // Ausgleichszahlung: wer gezahlt hat, verringert seine Schuld
+      const payer=(String(b.raw_text).split(':')[1]||'MANN');
+      net += (payer==='MANN' ? -A : A);
+      count++;
+      return;
+    }
+    if(!b.bezahler) return;               // alte Belege ohne Bezahler ignorieren
+    if(b.bezahler==='KONTO'){ count++; return; }  // gemeinsames Konto: keine Schuld zwischen euch
+    const t=b.teilung||'GETEILT';
+    const shareIch = t==='ICH' ? A : (t==='MANN' ? 0 : A/2);
+    const paidIch  = b.bezahler==='ICH' ? A : 0;
+    net += (paidIch - shareIch);
+    count++;
+  });
+  return { net, count };
+}
+
+// Ausgleich immer auf den GESAMTEN Saldo, mit Zahlungsart (Bar/Überweisung)
+async function buchAusgleich(methode){
+  const { net } = computeSaldo();
+  const abs=Math.abs(net);
+  if(abs<0.005){ toast('Schon ausgeglichen'); return; }
+  const payer = net>0 ? 'MANN' : 'ICH';   // wer zahlt, um auszugleichen
+  const marker = 'AUSGLEICH:'+payer+':'+(methode||'BAR');
+  toast('Wird gebucht…');
+  try{
+    let { error } = await sb.from('belege').insert({
+      datum: todayISO(), laden:'Ausgleich', kategorie:'Ausgleich',
+      bezahler:payer, teilung:null, gesamt:abs, foto_url:null, raw_text:marker
+    });
+    if(error && /kategorie|bezahler|teilung|column/i.test(String(error.message||''))){
+      const retry = await sb.from('belege').insert({
+        datum: todayISO(), laden:'Ausgleich', gesamt:abs, foto_url:null, raw_text:marker
+      });
+      if(retry.error) throw retry.error;
+    } else if(error){ throw error; }
+    toast('Ausgeglichen ✓');
+    await loadAll();
+    goTo('home');
+  }catch(e){ console.error('Ausgleich-Fehler:',e); toast('Fehler beim Buchen'); }
+}
+
+// Zahlungsart-Auswahl in der Saldo-Karte einblenden
+function showAusgleichMethode(){
+  const box=document.getElementById('ausgleich-actions');
+  if(!box) return;
+  const { net }=computeSaldo();
+  const wer = net>0 ? (esc(PERSON_MANN)+' zahlt '+esc(PERSON_ICH)) : (esc(PERSON_ICH)+' zahlt '+esc(PERSON_MANN));
+  box.innerHTML=`
+    <div style="font-size:12px;opacity:.9;margin:4px 0 8px;">${wer} — wie wurde ausgeglichen?</div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn" style="flex:1;background:#fff;color:#9a5c39;font-weight:600;" onclick="buchAusgleich('BAR')">Bar</button>
+      <button class="btn" style="flex:1;background:#fff;color:#9a5c39;font-weight:600;" onclick="buchAusgleich('UEBERWEISUNG')">Überweisung</button>
+    </div>
+    <button class="btn btn-block" style="margin-top:8px;background:transparent;color:#fff;border:1px solid rgba(255,255,255,.35);" onclick="renderSaldo()">Abbrechen</button>`;
+}
+
+// Infos aus einer Ausgleichs-Buchung lesen: {payer, methode}
+function ausgleichInfo(b){
+  const parts=String(b.raw_text||'').split(':');
+  return { payer: parts[1]||'MANN', methode: parts[2]||'BAR' };
+}
+function methodeLabel(m){ return m==='UEBERWEISUNG'?'Überweisung':'Bar'; }
+
+async function deleteAusgleich(id){
+  if(!confirm('Diese Ausgleichs-Buchung löschen? Der Saldo wird dann wieder aufgebaut.')) return;
+  try{
+    const { error } = await sb.from('belege').delete().eq('id',id);
+    if(error) throw error;
+    toast('Ausgleich gelöscht');
+    await loadAll();
+    goTo('home');
+  }catch(e){ console.error(e); toast('Fehler beim Löschen'); }
+}
+
+function renderSaldo(){
+  const el=document.getElementById('home-saldo');
+  if(!el) return;
+  const { net, count } = computeSaldo();
+  if(!count){ el.innerHTML=''; return; }
+  const abs=Math.abs(net);
+  let title, who, showBtn;
+  if(abs<0.005){ title='Alles ausgeglichen'; who='Ihr seid quitt 🎉'; showBtn=false; }
+  else if(net>0){ title=fmtEUR(abs); who=esc(PERSON_MANN)+' schuldet '+esc(PERSON_ICH); showBtn=true; }
+  else { title=fmtEUR(abs); who=esc(PERSON_ICH)+' schuldet '+esc(PERSON_MANN); showBtn=true; }
+
+  // Historie der letzten Ausgleiche
+  const historie=_belege.filter(isAusgleich)
+    .sort((a,b)=>(b.datum||'').localeCompare(a.datum||'')|| (b.id-a.id))
+    .slice(0,5);
+  const histHTML = historie.length ? `
+    <div style="margin-top:16px;">
+      <h3 style="font-size:15px;margin:0 0 10px;">Ausgleiche</h3>
+      ${historie.map(b=>{
+        const info=ausgleichInfo(b);
+        const richtung = info.payer==='MANN' ? (esc(PERSON_MANN)+' → '+esc(PERSON_ICH)) : (esc(PERSON_ICH)+' → '+esc(PERSON_MANN));
+        return `<div class="card-flat" style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <div style="font-weight:500;font-size:14px;">${richtung}</div>
+            <div class="muted" style="margin-top:2px;">${fmtDate(b.datum)} · ${methodeLabel(info.methode)}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <span style="font-weight:500;">${fmtEUR(b.gesamt)}</span>
+            <button class="btn-sm btn-ghost" style="padding:4px 8px;" onclick="deleteAusgleich(${b.id})">✕</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : '';
+
+  el.innerHTML=`
+    <div class="card" style="background:linear-gradient(135deg,#B5714A,#9a5c39);color:#fff;border:none;margin-top:14px;">
+      <div style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;opacity:.8;margin-bottom:6px;">Gemeinsame Kasse</div>
+      <div style="font-family:'Playfair Display',serif;font-size:30px;">${title}</div>
+      <div style="font-size:12.5px;opacity:.9;margin-top:4px;">${who}</div>
+      <div id="ausgleich-actions">
+        ${showBtn?`<button class="btn btn-block" style="margin-top:14px;background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.35);" onclick="showAusgleichMethode()">Ausgleich buchen</button>`:''}
+      </div>
+    </div>
+    ${histHTML}`;
 }
 
 function belegRowHTML(b){
   return `<div class="card-flat" style="padding:14px 16px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;" onclick="openBelegDetail(${b.id})">
     <div>
-      <div style="font-weight:500;font-size:14.5px;">${esc(b.laden||'Unbekannter Laden')}</div>
-      <div class="muted" style="margin-top:2px;">${fmtDate(b.datum)}</div>
+      <div style="font-weight:500;font-size:14.5px;">${esc(b.laden||b.kategorie||'Ausgabe')}</div>
+      <div class="muted" style="margin-top:2px;">${b.kategorie?esc(b.kategorie)+' · ':''}${fmtDate(b.datum)}</div>
     </div>
     <div style="font-family:'Playfair Display',serif;font-size:17px;">${fmtEUR(b.gesamt)}</div>
   </div>`;
@@ -351,7 +481,8 @@ function priceChangeRowHTML(c){
 // ═══════════════════════════════════════════════
 function renderBelege(){
   const c=document.getElementById('belege-list');
-  if(!_belege.length){
+  const list=_belege.filter(b=>!isAusgleich(b));
+  if(!list.length){
     c.innerHTML=`<div class="empty-state">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg>
       <div>Noch keine Belege erfasst.<br>Tippe unten rechts auf + zum Starten.</div>
@@ -360,7 +491,7 @@ function renderBelege(){
   }
   // nach Monat gruppieren
   const groups={};
-  _belege.forEach(b=>{
+  list.forEach(b=>{
     const ym=(b.datum||'').slice(0,7);
     if(!groups[ym])groups[ym]=[];
     groups[ym].push(b);
@@ -382,11 +513,7 @@ async function openBelegDetail(id){
   if(!b)return;
   const items=_history.filter(h=>h.beleg_id===id);
   const c=document.getElementById('beleg-detail-content');
-  c.innerHTML=`
-    <div class="eyebrow">${fmtDateLong(b.datum)}</div>
-    <h1 class="sec-title">${esc(b.laden||'Unbekannter Laden')}</h1>
-    <div class="sec-sub">${items.length} Position${items.length===1?'':'en'} · ${fmtEUR(b.gesamt)}</div>
-    ${b.foto_url?`<div class="card" style="padding:0;overflow:hidden;"><img src="${esc(b.foto_url)}" style="width:100%;display:block;"></div>`:''}
+  const positionenHTML = items.length ? `
     <div class="card-flat">
       ${items.map((h,i)=>{
         const art=_artikel.find(a=>a.id===h.artikel_id);
@@ -398,7 +525,29 @@ async function openBelegDetail(id){
           <div style="font-weight:500;">${fmtEUR(h.preis)}</div>
         </div>`;
       }).join('')}
-    </div>
+    </div>` : '';
+  c.innerHTML=`
+    <div class="eyebrow">${fmtDateLong(b.datum)}</div>
+    <h1 class="sec-title">${esc(b.laden||b.kategorie||'Ausgabe')}</h1>
+    <div class="sec-sub">${b.kategorie?esc(b.kategorie)+' · ':''}${fmtEUR(b.gesamt)}</div>
+    ${b.foto_url?`<div class="card" style="padding:0;overflow:hidden;"><img src="${esc(b.foto_url)}" style="width:100%;display:block;"></div>`:''}
+    ${b.kategorie?`<div class="card-flat" style="padding:14px 16px;display:flex;justify-content:space-between;align-items:center;">
+        <span class="muted">Kategorie</span>
+        <span style="font-weight:500;">${esc(b.kategorie)}</span>
+      </div>`:''}
+    ${b.laden?`<div class="card-flat" style="padding:14px 16px;display:flex;justify-content:space-between;align-items:center;">
+        <span class="muted">Laden / Beschreibung</span>
+        <span style="font-weight:500;">${esc(b.laden)}</span>
+      </div>`:''}
+    ${b.bezahler?`<div class="card-flat" style="padding:14px 16px;display:flex;justify-content:space-between;align-items:center;">
+        <span class="muted">Bezahlt von</span>
+        <span style="font-weight:500;">${esc(b.bezahler==='MANN'?PERSON_MANN:(b.bezahler==='KONTO'?PERSON_KONTO:PERSON_ICH))}</span>
+      </div>`:''}
+    ${b.teilung?`<div class="card-flat" style="padding:14px 16px;display:flex;justify-content:space-between;align-items:center;">
+        <span class="muted">Aufteilung</span>
+        <span style="font-weight:500;">${b.teilung==='GETEILT'?'50 : 50':(b.teilung==='ICH'?'Nur '+esc(PERSON_ICH):'Nur '+esc(PERSON_MANN))}</span>
+      </div>`:''}
+    ${positionenHTML}
     <button class="btn btn-ghost btn-block" style="margin-top:10px;color:#C0392B;" onclick="deleteBeleg(${b.id})">Beleg löschen</button>
   `;
   goTo('beleg-detail');
@@ -526,36 +675,36 @@ function buildPriceChart(hist,min,max){
 // ═══════════════════════════════════════════════
 function renderStatistik(){
   const c=document.getElementById('statistik-content');
-  if(!_belege.length){
+  const exp=_belege.filter(b=>!isAusgleich(b));
+  if(!exp.length){
     c.innerHTML=`<div class="empty-state"><div>Noch keine Daten für eine Auswertung.</div></div>`;
     return;
   }
   // nach Laden gruppieren
   const byLaden={};
-  _belege.forEach(b=>{
+  exp.forEach(b=>{
     const l=b.laden||'Unbekannt';
-    byLaden[l]=(byLaden[l]||0)+(Number(b.gesamt)||0);
+    byLaden[l]=(byLaden[l]||0)+meinAnteil(b);
   });
-  const ladenSorted=Object.entries(byLaden).sort((a,b)=>b[1]-a[1]);
+  const ladenSorted=Object.entries(byLaden).sort((a,b)=>b[1]-a[1]).filter(e=>e[1]>0.005);
   const maxLaden=ladenSorted[0]?ladenSorted[0][1]:1;
 
-  // nach Kategorie gruppieren (über history + artikel)
+  // nach Kategorie gruppieren (über belege.kategorie)
   const byKat={};
-  _history.forEach(h=>{
-    const art=_artikel.find(a=>a.id===h.artikel_id);
-    const k=(art&&art.kategorie)||'Sonstiges';
-    byKat[k]=(byKat[k]||0)+(Number(h.preis)||0);
+  exp.forEach(b=>{
+    const k=b.kategorie||'Ohne Kategorie';
+    byKat[k]=(byKat[k]||0)+meinAnteil(b);
   });
-  const katSorted=Object.entries(byKat).sort((a,b)=>b[1]-a[1]);
+  const katSorted=Object.entries(byKat).sort((a,b)=>b[1]-a[1]).filter(e=>e[1]>0.005);
   const maxKat=katSorted[0]?katSorted[0][1]:1;
 
-  const gesamt=_belege.reduce((s,b)=>s+(Number(b.gesamt)||0),0);
+  const gesamt=exp.reduce((s,b)=>s+meinAnteil(b),0);
 
   c.innerHTML=`
     <div class="card" style="text-align:center;">
-      <div class="muted">Gesamt erfasst</div>
+      <div class="muted">Meine Ausgaben gesamt</div>
       <div style="font-family:'Playfair Display',serif;font-size:30px;margin-top:4px;">${fmtEUR(gesamt)}</div>
-      <div class="muted" style="margin-top:2px;">${_belege.length} Belege · ${_artikel.length} Artikel</div>
+      <div class="muted" style="margin-top:2px;">${exp.length} ${exp.length===1?'Beleg':'Belege'}</div>
     </div>
 
     <h3 style="font-size:15px;margin:20px 0 10px;">Nach Laden</h3>
@@ -589,282 +738,170 @@ function renderStatistik(){
 }
 
 // ═══════════════════════════════════════════════
-// SCAN / OCR / ERFASSUNG
+// MANUELLE ERFASSUNG
 // ═══════════════════════════════════════════════
-let _scanState={foto:null,fotoUrl:null,rawText:'',zeilen:[],laden:'',datum:todayISO(),lastError:null};
+
+// Kategorien – hier kannst du jederzeit welche ergänzen oder umbenennen:
+const KATEGORIEN = [
+  'Supermarkt',
+  'Amazon',
+  'Mittagessen to Go',
+  'Restaurant / Café',
+  'Drogerie',
+  'Tanken',
+  'Freizeit',
+  'Haushalt',
+  'Sonstiges'
+];
+
+// Namen der beiden Personen – hier anpassen (z.B. echten Vornamen deines Manns):
+const PERSON_ICH  = 'Ich';
+const PERSON_MANN = 'Mein Mann';
+const PERSON_KONTO = 'Gemeinsames Konto';
+
+let _entry = { betrag:'', kategorie:KATEGORIEN[0], laden:'', datum:todayISO(), bezahler:'ICH', teilung:'GETEILT' };
+
+function setSeg(field,val,btn){
+  _entry[field]=val;
+  btn.parentElement.querySelectorAll('.seg-btn').forEach(x=>x.classList.toggle('active',x===btn));
+}
 
 function openScanScreen(){
-  _scanState={foto:null,fotoUrl:null,rawText:'',zeilen:[],laden:'',datum:todayISO(),lastError:null};
-  renderScanUpload();
+  _entry = { betrag:'', kategorie:KATEGORIEN[0], laden:'', datum:todayISO(), bezahler:'ICH', teilung:'GETEILT' };
+  renderManualForm();
   goTo('scan');
 }
-function closeScanScreen(){goTo('home');}
+function closeScanScreen(){ goTo('home'); }
 
-function renderScanUpload(){
-  const c=document.getElementById('scan-content');
-  c.innerHTML=`
-    <div class="card" style="text-align:center;padding:40px 20px;">
-      <svg viewBox="0 0 24 24" fill="none" stroke="var(--terra)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="width:48px;height:48px;margin:0 auto 16px;"><rect x="3" y="6" width="18" height="14" rx="2"/><path d="M8 6 9.4 3.8a1 1 0 0 1 .84-.46h3.52a1 1 0 0 1 .84.46L16 6"/><circle cx="12" cy="13" r="3.2"/></svg>
-      <div style="font-weight:500;margin-bottom:6px;">Beleg fotografieren</div>
-      <div class="muted" style="margin-bottom:20px;">Ein Kassenzettel pro Foto – am besten gut ausgeleuchtet und gerade fotografiert.</div>
-      <label class="btn btn-primary btn-block">
-        Foto auswählen
-        <input type="file" accept="image/*" capture="environment" style="display:none" onchange="handleScanPhoto(event)">
-      </label>
-    </div>
-    <div style="text-align:center;">
-      <button class="btn-sm btn-ghost" onclick="renderManualEntry()">Stattdessen manuell eingeben</button>
-    </div>
-  `;
+function alleKategorien(){
+  const set=[...KATEGORIEN];
+  _belege.forEach(b=>{
+    const k=b.kategorie;
+    if(k && k!=='Ausgleich' && !isAusgleich(b) && !set.includes(k)) set.push(k);
+  });
+  return set;
 }
 
-async function handleScanPhoto(event){
-  const file=event.target.files[0];
-  if(!file)return;
-  _scanState.foto=file;
-
-  const c=document.getElementById('scan-content');
-  c.innerHTML=`
-    <div class="card" style="text-align:center;padding:40px 20px;">
-      <div class="spinner" style="margin:0 auto 18px;"></div>
-      <div style="font-weight:500;margin-bottom:6px;">Beleg wird gelesen…</div>
-      <div class="muted">Das kann einen kurzen Moment dauern.</div>
-    </div>
-  `;
-
-  try{
-    // Bild komprimieren für schnelleren Upload
-    const shrunk=await shrinkImage(file);
-    _scanState.foto=shrunk;
-
-    const form=new FormData();
-    form.append('document',shrunk,'beleg.jpg');
-
-    const fnUrl=SUPABASE_URL+'/functions/v1/parse-receipt';
-    _scanState.debugUrl=fnUrl;
-    const res=await fetch(fnUrl,{
-      method:'POST',
-      headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+SUPABASE_KEY},
-      body:form
-    });
-    let data;
-    try{ data=await res.json(); }catch(parseErr){
-      const raw=await res.text().catch(()=>'(kein Text)');
-      throw new Error('Antwort war kein JSON (Status '+res.status+'): '+raw.slice(0,300));
-    }
-
-    if(!res.ok||data.error){
-      console.error('Mindee-Fehler:',data);
-      const detail=data.error?(typeof data.error==='string'?data.error:JSON.stringify(data.error)):('HTTP '+res.status);
-      const extra=data.detail?(' – '+JSON.stringify(data.detail).slice(0,200)):'';
-      _scanState.zeilen=[];
-      _scanState.rawText='';
-      _scanState.lastError=detail+extra;
-      renderScanReview();
-      return;
-    }else{
-      _scanState.laden=data.laden||'';
-      _scanState.datum=data.datum||todayISO();
-      _scanState.zeilen=(data.positionen||[]).map(p=>({name:p.name,preis:Number(p.preis)||0}));
-      _scanState.rawText=JSON.stringify(data);
-      _scanState.lastError=null;
-      if(!_scanState.zeilen.length){
-        toast('Keine Positionen erkannt – bitte manuell ergänzen');
-      }
-    }
-    renderScanReview();
-  }catch(e){
-    console.error('Fehler beim Beleg-Scan:',e);
-    _scanState.zeilen=[];
-    _scanState.lastError=(e&&e.message)?e.message:String(e);
-    renderScanReview();
+function onKatChange(v){
+  const wrap=document.getElementById('m-kategorie-neu-wrap');
+  if(v==='__NEU__'){
+    _entry.kategorie='';
+    if(wrap){ wrap.style.display='block'; document.getElementById('m-kategorie-neu').focus(); }
+  }else{
+    _entry.kategorie=v;
+    if(wrap) wrap.style.display='none';
   }
 }
 
-// Bild verkleinern (analog Travona-Pattern)
-function shrinkImage(file){
-  return new Promise((resolve)=>{
-    if(file.type==='application/pdf'){resolve(file);return;}
-    const img=new Image();
-    const reader=new FileReader();
-    reader.onload=function(e){
-      img.onload=function(){
-        const maxDim=1600;
-        let w=img.width,h=img.height;
-        if(w>maxDim||h>maxDim){
-          if(w>h){h=Math.round(h*maxDim/w);w=maxDim;}
-          else{w=Math.round(w*maxDim/h);h=maxDim;}
-        }
-        const canvas=document.createElement('canvas');
-        canvas.width=w;canvas.height=h;
-        canvas.getContext('2d').drawImage(img,0,0,w,h);
-        canvas.toBlob(function(blob){
-          if(!blob){resolve(file);return;}
-          resolve(new File([blob],'beleg.jpg',{type:'image/jpeg'}));
-        },'image/jpeg',0.85);
-      };
-      img.onerror=function(){resolve(file);};
-      img.src=e.target.result;
-    };
-    reader.onerror=function(){resolve(file);};
-    reader.readAsDataURL(file);
-  });
-}
-
-// Zeilen aus OCR-Rohtext zu {name, preis} parsen
-function parseReceiptLines(text){
-  const lines=text.split('\n').map(l=>l.trim()).filter(l=>l.length>1);
-  const out=[];
-  // Preis-Pattern: 1,99 / 1.99 / 12,50 am Zeilenende, evtl. mit A/B Steuerkürzel davor
-  const priceRe=/(\d{1,4}[.,]\d{2})\s*[A-Z]?\s*$/;
-  const skipWords=/summe|gesamt|bar|kredit|ec-cash|zahlung|rückgeld|total|mwst|steuer|tse|beleg|kassenbon|kasse|bon-nr|uid|kunden|karte|pfand.?rück|zwischensumme/i;
-  lines.forEach(line=>{
-    if(skipWords.test(line))return;
-    const m=line.match(priceRe);
-    if(!m)return;
-    let preis=parseFloat(m[1].replace(',','.'));
-    if(isNaN(preis)||preis<=0||preis>500)return;
-    let name=line.slice(0,m.index).trim();
-    name=name.replace(/^\d+[.,]?\d*\s*[xX×]\s*/,''); // führende Menge "2x " entfernen
-    name=name.replace(/\s{2,}/g,' ').trim();
-    if(name.length<2)return;
-    out.push({name,preis});
-  });
-  return out;
-}
-
-function renderScanReview(){
+function renderManualForm(){
   const c=document.getElementById('scan-content');
-  const rows=_scanState.zeilen.map((z,i)=>`
-    <div class="card-flat" style="padding:11px 14px;display:flex;gap:10px;align-items:center;">
-      <input type="text" value="${esc(z.name)}" oninput="_scanState.zeilen[${i}].name=this.value"
-        style="flex:1;border:none;background:transparent;font-size:14px;padding:4px 0;">
-      <input type="text" value="${z.preis.toFixed(2).replace('.',',')}" inputmode="decimal"
-        oninput="_scanState.zeilen[${i}].preis=parseFloat((this.value||'0').replace(',','.'))||0"
-        style="width:72px;border:none;background:transparent;font-size:14px;text-align:right;padding:4px 0;">
-      <span style="font-size:13px;color:var(--fog);">€</span>
-      <button onclick="removeScanLine(${i})" style="color:var(--fog);font-size:18px;line-height:1;padding:2px 4px;">✕</button>
-    </div>
-  `).join('');
-
-  const summe=_scanState.zeilen.reduce((s,z)=>s+z.preis,0);
-
-  const errorBanner=_scanState.lastError
-    ? `<div class="card" style="background:#FBEAEA;border-color:#E3A5A5;margin-bottom:14px;">
-        <div style="font-weight:600;color:#B23A3A;margin-bottom:4px;font-size:13.5px;">Fehler bei der Texterkennung</div>
-        <div style="font-size:12.5px;color:#7A2E2E;word-break:break-word;font-family:monospace;">${esc(_scanState.lastError)}</div>
-        ${_scanState.debugUrl?`<div style="font-size:11px;color:#7A2E2E;word-break:break-all;font-family:monospace;margin-top:8px;opacity:.85;">Aufgerufen:<br>${esc(_scanState.debugUrl)}</div>`:''}
-      </div>`
-    : '';
-
+  const kats=alleKategorien();
+  if(_entry.kategorie && !kats.includes(_entry.kategorie)) kats.push(_entry.kategorie);
+  const opts=kats.map(k=>`<option value="${esc(k)}"${k===_entry.kategorie?' selected':''}>${esc(k)}</option>`).join('')
+    + `<option value="__NEU__">+ Neue Kategorie…</option>`;
   c.innerHTML=`
-    ${errorBanner}
-    ${_scanState.foto?`<div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;"><img src="${URL.createObjectURL(_scanState.foto)}" style="width:100%;max-height:220px;object-fit:cover;display:block;"></div>`:''}
+    <div class="card">
+      <div class="field">
+        <label class="field-label">Betrag (€)</label>
+        <input type="text" inputmode="decimal" id="m-betrag" placeholder="z.B. 20,38" value="${esc(_entry.betrag)}"
+          style="width:100%;font-size:26px;font-family:'Playfair Display',serif;padding:6px 0;border:none;border-bottom:2px solid var(--rule);background:transparent;outline:none;">
+      </div>
 
-    <div class="card" style="margin-bottom:16px;">
-      <div style="display:flex;gap:10px;margin-bottom:12px;">
-        <div style="flex:1;">
-          <label class="muted" style="font-size:11.5px;">Laden</label>
-          <input type="text" id="scan-laden" placeholder="z.B. Rewe" value="${esc(_scanState.laden)}"
-            style="width:100%;padding:9px 0;border:none;border-bottom:1px solid var(--rule);background:transparent;font-size:14.5px;">
+      <div class="field" style="margin-top:20px;">
+        <label class="field-label">Kategorie</label>
+        <select id="m-kategorie" onchange="onKatChange(this.value)"
+          style="width:100%;font-size:15px;padding:12px;border:1px solid var(--rule);border-radius:10px;background:var(--paper);outline:none;">
+          ${opts}
+        </select>
+        <div id="m-kategorie-neu-wrap" style="display:none;margin-top:10px;">
+          <input type="text" id="m-kategorie-neu" placeholder="Name der neuen Kategorie" value=""
+            oninput="_entry.kategorie=this.value"
+            style="width:100%;font-size:15px;padding:12px;border:1px solid var(--terra);border-radius:10px;background:var(--paper);outline:none;">
         </div>
-        <div style="width:130px;">
-          <label class="muted" style="font-size:11.5px;">Datum</label>
-          <input type="date" id="scan-datum" value="${_scanState.datum}"
-            style="width:100%;padding:9px 0;border:none;border-bottom:1px solid var(--rule);background:transparent;font-size:14.5px;">
+      </div>
+
+      <div class="field" style="margin-top:16px;">
+        <label class="field-label">Laden / Beschreibung <span class="muted">(optional)</span></label>
+        <input type="text" id="m-laden" placeholder="z.B. Netto, Amazon-Bestellung" value="${esc(_entry.laden)}"
+          style="width:100%;font-size:15px;padding:12px;border:1px solid var(--rule);border-radius:10px;background:var(--paper);outline:none;">
+      </div>
+
+      <div class="field" style="margin-top:16px;">
+        <label class="field-label">Datum</label>
+        <input type="date" id="m-datum" value="${_entry.datum}"
+          style="width:100%;font-size:15px;padding:12px;border:1px solid var(--rule);border-radius:10px;background:var(--paper);outline:none;">
+      </div>
+
+      <div class="field" style="margin-top:20px;">
+        <label class="field-label">Bezahlt von</label>
+        <div class="seg" id="seg-bezahler" style="flex-wrap:wrap;">
+          <button type="button" class="seg-btn${_entry.bezahler==='ICH'?' active':''}" onclick="setSeg('bezahler','ICH',this)">${esc(PERSON_ICH)}</button>
+          <button type="button" class="seg-btn${_entry.bezahler==='MANN'?' active':''}" onclick="setSeg('bezahler','MANN',this)">${esc(PERSON_MANN)}</button>
+          <button type="button" class="seg-btn${_entry.bezahler==='KONTO'?' active':''}" onclick="setSeg('bezahler','KONTO',this)">Gemeinsam</button>
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:16px;">
+        <label class="field-label">Aufteilung</label>
+        <div class="seg" id="seg-teilung">
+          <button type="button" class="seg-btn${_entry.teilung==='GETEILT'?' active':''}" onclick="setSeg('teilung','GETEILT',this)">50 : 50</button>
+          <button type="button" class="seg-btn${_entry.teilung==='ICH'?' active':''}" onclick="setSeg('teilung','ICH',this)">Nur ${esc(PERSON_ICH)}</button>
+          <button type="button" class="seg-btn${_entry.teilung==='MANN'?' active':''}" onclick="setSeg('teilung','MANN',this)">Nur ${esc(PERSON_MANN)}</button>
         </div>
       </div>
     </div>
 
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-      <h3 style="font-size:15px;">Positionen (${_scanState.zeilen.length})</h3>
-      <button class="btn-sm btn-ghost" onclick="addScanLine()">+ Position</button>
-    </div>
-    ${rows||'<div class="muted" style="padding:12px 2px;">Keine Positionen erkannt – füge sie manuell hinzu.</div>'}
-
-    <div style="display:flex;justify-content:space-between;padding:14px 4px;font-weight:600;">
-      <span>Summe</span><span id="scan-summe">${fmtEUR(summe)}</span>
-    </div>
-
-    <button class="btn btn-primary btn-block" style="margin-top:10px;" onclick="saveScanBeleg()">Beleg speichern</button>
-    <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="renderScanUpload()">Neu fotografieren</button>
+    <button class="btn btn-primary btn-block" style="margin-top:16px;" onclick="saveManualBeleg()">Ausgabe speichern</button>
+    <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="closeScanScreen()">Abbrechen</button>
   `;
-
-  document.getElementById('scan-laden').addEventListener('input',e=>_scanState.laden=e.target.value);
-  document.getElementById('scan-datum').addEventListener('input',e=>_scanState.datum=e.target.value);
+  // Werte im State halten
+  document.getElementById('m-betrag').addEventListener('input',e=>_entry.betrag=e.target.value);
+  document.getElementById('m-laden').addEventListener('input',e=>_entry.laden=e.target.value);
+  document.getElementById('m-datum').addEventListener('input',e=>_entry.datum=e.target.value);
 }
 
-function addScanLine(){
-  _scanState.zeilen.push({name:'',preis:0});
-  renderScanReview();
-}
-function removeScanLine(i){
-  _scanState.zeilen.splice(i,1);
-  renderScanReview();
+function parseBetrag(v){
+  if(v==null) return NaN;
+  return parseFloat(String(v).replace(/\s/g,'').replace('.','').replace(',','.'));
 }
 
-function renderManualEntry(){
-  _scanState.foto=null;
-  _scanState.zeilen=[{name:'',preis:0}];
-  renderScanReview();
-}
+async function saveManualBeleg(){
+  const betrag=parseBetrag(document.getElementById('m-betrag')?.value);
+  let kategorie=document.getElementById('m-kategorie')?.value;
+  if(kategorie==='__NEU__'){ kategorie=(document.getElementById('m-kategorie-neu')?.value||'').trim(); }
+  kategorie=(kategorie||_entry.kategorie||'').trim()||'Sonstiges';
+  const laden=(document.getElementById('m-laden')?.value||'').trim();
+  const datum=document.getElementById('m-datum')?.value||_entry.datum;
+  const bezahler=_entry.bezahler||'ICH';
+  const teilung=_entry.teilung||'GETEILT';
 
-async function saveScanBeleg(){
-  const laden=(document.getElementById('scan-laden')?.value||_scanState.laden||'').trim();
-  const datum=document.getElementById('scan-datum')?.value||_scanState.datum;
-  const zeilen=_scanState.zeilen.filter(z=>z.name.trim()&&z.preis>0);
-  if(!zeilen.length){toast('Bitte mindestens eine Position mit Namen und Preis angeben');return;}
-  if(!datum){toast('Bitte ein Datum angeben');return;}
+  if(!betrag||betrag<=0){ toast('Bitte einen gültigen Betrag eingeben'); return; }
+  if(!datum){ toast('Bitte ein Datum angeben'); return; }
 
-  const gesamt=zeilen.reduce((s,z)=>s+z.preis,0);
-  toast('Beleg wird gespeichert…');
-
+  toast('Wird gespeichert…');
   try{
-    let fotoUrl=null;
-    if(_scanState.foto){
-      const path='belege/'+Date.now()+'_'+Math.floor(Math.random()*10000)+'.jpg';
-      const {error:upErr}=await sb.storage.from('Belege-fotos').upload(path,_scanState.foto,{contentType:'image/jpeg'});
-      if(!upErr){
-        const {data}=sb.storage.from('Belege-fotos').getPublicUrl(path);
-        fotoUrl=data?.publicUrl||null;
-      }
-    }
-
-    const {data:belegData,error:belegErr}=await sb.from('belege').insert({
-      foto_url:fotoUrl,raw_text:_scanState.rawText||null,datum,laden:laden||null,gesamt
-    }).select().single();
-    if(belegErr)throw belegErr;
-    const belegId=belegData.id;
-
-    for(const z of zeilen){
-      const artikelId=await findOrCreateArtikel(z.name.trim());
-      await sb.from('artikel_history').insert({
-        artikel_id:artikelId,preis:z.preis,laden:laden||null,datum,beleg_id:belegId
+    // Primär: mit allen neuen Spalten (kategorie, bezahler, teilung)
+    let { error } = await sb.from('belege').insert({
+      datum, laden:laden||null, kategorie, bezahler, teilung, gesamt:betrag, foto_url:null, raw_text:null
+    });
+    // Falls eine der neuen Spalten noch nicht existiert: minimal speichern + Hinweis
+    if(error && /kategorie|bezahler|teilung|column/i.test(String(error.message||''))){
+      const retry = await sb.from('belege').insert({
+        datum, laden:(laden?laden+' · '+kategorie:kategorie), gesamt:betrag, foto_url:null, raw_text:null
       });
+      if(retry.error) throw retry.error;
+      toast('Gespeichert – bitte SQL-Spalten anlegen (siehe Anleitung)');
+    } else if(error){
+      throw error;
+    } else {
+      toast('Ausgabe gespeichert ✓');
     }
-
-    toast('Beleg gespeichert ✓');
     await loadAll();
     goTo('home');
   }catch(e){
     console.error('Speicherfehler:',e);
     toast('Fehler beim Speichern – bitte erneut versuchen');
   }
-}
-
-async function findOrCreateArtikel(name){
-  // Case-insensitive Suche in lokalem Cache
-  let existing=_artikel.find(a=>a.name.toLowerCase()===name.toLowerCase());
-  if(existing)return existing.id;
-  const {data,error}=await sb.from('artikel').insert({name,erste_erfassung:todayISO()}).select().single();
-  if(error){
-    // evtl. Unique-Constraint-Konflikt (gleichzeitig angelegt) -> nachladen
-    const {data:d2}=await sb.from('artikel').select('*').ilike('name',name).limit(1).single();
-    if(d2){_artikel.push(d2);return d2.id;}
-    throw error;
-  }
-  _artikel.push(data);
-  return data.id;
 }
 
 document.addEventListener('DOMContentLoaded',initApp);
