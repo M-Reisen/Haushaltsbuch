@@ -900,7 +900,7 @@ async function saveManualBeleg(){
     goTo('home');
   }catch(e){
     console.error('Speicherfehler:',e);
-    toast('Fehler beim Speichern – bitte erneut versuchen');
+    toast('Fehler: '+(e&&e.message?e.message:JSON.stringify(e)));
   }
 }
 
